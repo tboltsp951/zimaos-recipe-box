@@ -1,0 +1,14 @@
+.git
+.github
+node_modules
+Apps
+tests
+test-results
+playwright-report
+store
+data
+*.spec.js
+playwright.config.js
+README.md
+Dockerfile
+.dockerignore

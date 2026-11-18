@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2f6f4e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Recipe Box</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
+<link rel="icon" href="icons/icon-512.png" sizes="512x512" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" sizes="180x180">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>Recipe Box</h1>
+    <div class="small">Local-first recipes · import · plan · shop · cook</div>
+  </div>
+  <div class="actions">
+    <button class="primary" aria-label="New recipe" id="btnNew">New</button>
+    <button aria-label="Import recipes" id="btnImport">Import</button>
+    <button aria-label="Meal plan" id="btnPlan">Plan <span class="kbd">P</span></button>
+    <button aria-label="Shopping list" id="btnShop">Shopping <span class="kbd">S</span></button>
+    <button aria-label="Calendar / meal slots" id="btnCalendar">Calendar</button>
+    <button aria-label="Pantry" id="btnPantry">Pantry</button>
+    <button aria-label="Timers" id="btnTimers">Timers</button>
+    <button aria-label="Cookbook / print PDF" id="btnCookbook">Cookbook</button>
+    <button aria-label="History / trash" id="btnHistory">History</button>
+    <button aria-label="Export recipes" id="btnExport">Export</button>
+    <button aria-label="Data file / linked JSON" id="btnFile">Data file</button>
+    <button aria-label="Sync with server" id="btnSync">Sync</button>
+    <button aria-label="AI / settings" id="btnSet">Settings</button>
+    <button aria-label="Theme (light/dark)" id="btnTheme">Theme</button>
+  </div>
+</header>
+<main>
+  <aside>
+    <h2>Categories</h2>
+    <div class="cats" id="cats"></div>
+    <div class="tools"><input id="newCat" placeholder="New category"><button id="addCat">Add</button></div>
+    <div class="panel small" id="storageInfo"></div>
+    <div class="panel small" id="recRecommendations"></div>
+    <div class="panel small" id="fileInfo">Data file: browser storage (not linked)</div>
+    <div class="panel small">
+      <strong>What can I cook?</strong>
+      <div id="cookableInfo" class="small" style="margin:4px 0">Add pantry items to see matches.</div>
+      <div id="cookableList" class="listbox" style="max-height:160px;overflow:auto"></div>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button id="btnDupes">Find duplicates</button><button id="btnCardsAll">Print recipe cards</button><button id="btnExportSel">Export selected</button></div>
+    </div>
+  </aside>
+  <section>
+    <div class="grid2"><input id="q" type="search" placeholder="Search title, ingredients, notes, tags"><select id="sort"><option value="updated">Sort: recently updated</option><option value="title">Sort: title</option><option value="rating">Sort: rating</option><option value="fav">Sort: favorites first</option></select></div>
+    <details class="panel" style="margin:8px 0"><summary><strong>Filters</strong> <span class="small">(favorites, photos, rating, difficulty)</span></summary>
+      <div class="grid2" style="margin-top:8px">
+        <label class="ck"><input type="checkbox" id="fltFav"> Favorites only</label>
+        <label class="ck"><input type="checkbox" id="fltPhoto"> Has photo</label>
+        <label>Min rating<select id="fltRating"><option value="0">Any</option><option value="1">1+</option><option value="2">2+</option><option value="3">3+</option><option value="4">4+</option><option value="5">5</option></select></label>
+        <label>Difficulty<select id="fltDiff"><option value="">Any</option><option>Easy</option><option>Medium</option><option>Hard</option></select></label>
+      </div>
+      <div class="row" style="justify-content:flex-start;align-items:center;margin-top:8px">
+        <select id="savedViewSel" style="min-width:170px"><option value="">Saved filters…</option></select>
+        <button id="savedViewApply">Apply</button>
+        <input id="savedViewName" placeholder="Name this view" style="width:150px">
+        <button id="savedViewSave">Save current</button>
+        <button id="savedViewDelete">Delete</button>
+      </div>
+      <div class="row" style="justify-content:flex-start;flex-wrap:wrap;margin-top:6px">
+        <label class="ck"><input type="checkbox" id="fltDietaryVeg"> Vegetarian</label>
+        <label class="ck"><input type="checkbox" id="fltDietaryVegan"> Vegan</label>
+        <label class="ck"><input type="checkbox" id="fltDietaryGluten"> Gluten-free</label>
+        <label class="ck"><input type="checkbox" id="fltDietaryDairy"> Dairy-free</label>
+      </div>
+      <div class="row" style="justify-content:flex-start"><button id="fltClear">Clear filters</button></div>
+    </details>
+    <div class="chips" id="chips"></div>
+    <div class="row spread" style="margin:8px 0"><span class="small" id="listInfo"></span><button id="btnBulk">Select recipes</button></div>
+    <div id="bulkBar" class="panel small" style="display:none">
+      <div class="row spread" style="margin:0 0 8px">
+        <strong id="bulkCount">0 selected</strong>
+        <span style="display:flex;gap:6px;flex-wrap:wrap"><button id="bulkSelectAll">Select all shown</button><button id="bulkClear">Clear</button><button id="bulkDone">Done</button></span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <input id="bulkTagIn" placeholder="tag" style="width:110px"><button id="bulkTagAdd">Add tag</button>
+        <select id="bulkCatSel"></select><button id="bulkCatAdd">Add category</button>
+        <button id="bulkFav">Favorite</button><button id="bulkUnfav">Unfavorite</button>
+        <button id="bulkPlan">Add to plan</button><button id="bulkShop">Add to shopping</button>
+        <button id="bulkExport">Export selected</button><button id="bulkDelete" class="danger">Delete</button>
+      </div>
+      <p class="hint">Click recipe cards to select/deselect. Bulk actions apply to all selected recipes.</p>
+    </div>
+    <div class="list" id="list"></div>
+  </section>
+</main>
+
+<dialog id="dView"><div class="view" id="viewBody"></div></dialog>
+<dialog id="dCook"><div id="cookBody"></div></dialog>
+
+<dialog id="dEdit">
+  <h2 id="editTitle" style="margin-top:0">Edit recipe</h2>
+  <div id="dupWarn" class="status" style="margin-bottom:8px"></div>
+  <label for="fTitle">Title</label><input id="fTitle">
+  <label>Categories</label><div class="catsel" id="fCatBox"></div>
+  <div class="grid2">
+    <div><label for="fServings">Servings</label><input id="fServings"></div>
+    <div><label for="fTime">Time</label><input id="fTime" placeholder="e.g. 30 min"></div>
+    <div><label for="fDifficulty">Difficulty</label><select id="fDifficulty"><option value="">—</option><option>Easy</option><option>Medium</option><option>Hard</option></select></div>
+    <div><label for="fRating">Rating (0-5)</label><input id="fRating" type="number" min="0" max="5" step="1" value="0"></div>
+  </div>
+  <label for="fTags">Tags (comma separated)</label><input id="fTags">
+  <label class="ck" style="margin:8px 0"><input type="checkbox" id="fFav"> Favorite</label>
+  <label for="fMain">Main ingredients (comma separated; blank = auto)</label><input id="fMain">
+  <label for="fIng">Ingredients (one per line)</label><textarea id="fIng"></textarea>
+  <p class="hint">Sections: start a line with <code>## Sauce</code>. Notes/substitutes: <code>2 cups flour | note: sifted | sub: bread flour</code>. Sections and extras stay in the recipe; the shopping list uses the main ingredient only.</p>
+  <label for="fSteps">Steps (one per line)</label><textarea id="fSteps"></textarea>
+  <label for="fEquip">Equipment (one per line)</label><textarea id="fEquip"></textarea>
+  <label for="fNutrition">Nutrition / notes about nutrition</label><textarea id="fNutrition" style="min-height:60px"></textarea>
+  <label for="fNotes">Notes</label><textarea id="fNotes" style="min-height:70px"></textarea>
+  <label for="fSource">Source URL</label><input id="fSource" type="url">
+  <div class="row"><button id="eCancel">Cancel</button><button class="primary" id="eSave">Save</button></div>
+</dialog>
+
+<dialog id="dImport">
+  <h2 style="margin-top:0">Import recipes</h2>
+  <div id="iStatus" class="status"></div>
+  <label>Import into categories (optional)</label><div class="catsel" id="fImpCat"></div>
+  <label for="fUrl">From a website</label>
+  <div style="display:flex;gap:8px"><input id="fUrl" type="url" placeholder="https://..."><button class="primary" id="uGo">Fetch</button></div>
+  <p class="hint" id="uHint"></p>
+  <label class="ck" style="margin-top:6px"><input type="checkbox" id="fAiUrl"> Use AI to read page</label>
+  <label class="ck" style="margin-top:4px"><input type="checkbox" id="fAutoImg"> Auto-fetch recipe image from website (when available)</label>
+  <details style="margin-top:6px"><summary class="small">Bulk import URLs (one per line)</summary>
+    <textarea id="fBulkUrls" style="min-height:70px;margin-top:6px" placeholder="https://...&#10;https://..."></textarea>
+    <div class="row" style="justify-content:flex-start"><button id="uBulkGo">Fetch all URLs</button></div>
+  </details>
+  <div id="pickBox" class="panel" style="display:none"><strong>Select recipes to review/import:</strong><div id="pickList" class="listbox"></div><div class="row"><button id="pickNone">None</button><button class="primary" id="pickGo">Review selected</button></div></div>
+  <hr>
+  <label for="fFile">From file(s) (JSON / text)</label>
+  <input id="fFile" type="file" accept=".json,application/json,text/plain" multiple>
+  <div class="row" style="justify-content:flex-start;margin-top:6px">
+    <button id="cameraCapture" class="primary" style="width:100%">Capture with Camera</button>
+  </div>
+  <label for="fPaste">Paste recipe text</label>
+  <textarea id="fPaste" placeholder="Paste ingredients/steps or recipe text"></textarea>
+  <div class="row" style="justify-content:flex-start"><button id="pasteAi">Extract pasted with AI</button><button id="iGo" class="primary">Import pasted/files</button></div>
+  <hr>
+  <label>Photos / scans / PDF</label>
+  <input id="fPic" type="file" accept="image/*,application/pdf" multiple capture="environment">
+  <div id="picStage" class="listbox" style="margin-top:6px"></div>
+  <p class="hint" id="pHint"></p>
+  <div class="row" style="justify-content:flex-start"><button id="pClear">Clear staged</button><button id="pGo">Read staged images</button></div>
+  <div class="row"><button id="iCancel">Close</button></div>
+</dialog>
+
+<dialog id="dDup">
+  <h2 style="margin-top:0">Possible duplicate recipe</h2>
+  <p class="small">A recipe with the same or a similar name already exists. Compare and choose what to keep.</p>
+  <div id="dupBody"></div>
+  <div class="row"><button id="dupCancel">Cancel</button><button id="dupKeepExisting">Keep existing (delete imported)</button><button id="dupKeepImported">Keep imported (replace existing)</button><button class="primary" id="dupKeepBoth">Keep both (rename imported)</button></div>
+  <div style="margin-top:8px"><label for="dupRename">Name for imported copy (if keeping both)</label><input id="dupRename"></div>
+</dialog>
+
+<dialog id="dPlan">
+  <h2 style="margin-top:0">Meal plan</h2>
+  <div class="panel">
+    <label for="planAdd">Add a recipe to plan</label>
+    <div style="display:flex;gap:8px"><select id="planAdd"></select><button id="planAddBtn">Add</button></div>
+  </div>
+  <div class="panel"><strong>Planned meals</strong><div id="planList" class="listbox"></div></div>
+  <div class="row"><button id="planClose">Close</button></div>
+</dialog>
+
+<dialog id="dShop">
+  <h2 style="margin-top:0">Shopping list</h2>
+  <div class="panel"><div class="row spread" style="margin:0 0 6px"><strong>Items</strong><span style="display:flex;gap:6px;flex-wrap:wrap"><button id="shopBuild">Add planned meals</button><button id="shopReplace">Replace with planned meals</button><button id="shopCopy">Copy</button><button id="shopClear">Clear checks</button><button id="shopClearDone">Clear completed</button><button id="shopClearAll" class="danger">Clear all</button></span></div>
+    <div style="display:flex;gap:8px;margin:6px 0"><input id="shopAddIn" placeholder="Add custom item (e.g. 2 lemons)" style="flex:1"><button id="shopAddBtn">Add item</button></div>
+    <div style="display:flex;gap:8px;margin:6px 0"><select id="shopAddRecipe" style="flex:1"></select><button id="shopAddRecipeBtn">Add recipe to list</button></div>
+    <div class="row" style="justify-content:flex-start;flex-wrap:wrap;margin:6px 0"><label class="ck">Budget $ <input id="shopBudgetIn" type="number" min="0" step="0.01" inputmode="decimal" style="width:92px"></label><button id="shopEstimate">Estimate from pantry</button><button id="shopPrint">Print / PDF</button><button id="shopShare">Share</button></div>
+    <div id="shopTotals" class="small" style="margin:4px 0"></div>
+    <p class="hint">Add ingredients from any recipe with “Add to list”, add planned meals, pick a recipe above, or type custom items. Items are combined/deduped and grouped by aisle.</p><div id="shopList" class="listbox"></div></div>
+  <div class="row"><button id="shopClose">Close</button></div>
+</dialog>
+
+<dialog id="dCalendar">
+  <h2 style="margin-top:0">Calendar / meal slots</h2>
+  <div class="panel grid2">
+    <div><label for="calDate">Date</label><input id="calDate" type="date"></div>
+    <div><label for="calMeal">Meal</label><select id="calMeal"><option>Breakfast</option><option>Lunch</option><option>Dinner</option><option>Snack</option></select></div>
+    <div><label for="calServings">Servings (optional)</label><input id="calServings" type="number" min="0" step="1" placeholder="as recipe"></div>
+    <div><label for="calRepeat">Repeat weekly</label><input id="calRepeat" type="number" min="1" max="52" step="1" value="1"></div>
+    <div style="grid-column:1/-1"><label for="calRecipe">Recipe</label><select id="calRecipe"></select></div>
+  </div>
+  <div class="row" style="justify-content:flex-start"><button id="calAdd">Add to calendar</button></div>
+  <div class="panel"><div class="row spread" style="margin:0 0 6px"><strong id="calWeekLabel">This week</strong><span style="display:flex;gap:6px;flex-wrap:wrap"><button id="calPrev">&lsaquo; Prev</button><button id="calToday">Today</button><button id="calNext">Next &rsaquo;</button><button id="calCopyWeek">Copy week</button><button id="calPrint">Print week</button><button id="calPrep">Meal prep</button></span></div><div id="calWeekGrid" class="weekgrid-wrap"></div></div>
+  <div class="panel"><strong>Calendar</strong><div id="calList" class="listbox"></div></div>
+  <div class="panel grid2">
+    <div><label for="calFrom">Build shopping from (start)</label><input id="calFrom" type="date"></div>
+    <div><label for="calTo">to (end)</label><input id="calTo" type="date"></div>
+  </div>
+  <div class="row"><button id="calBuild">Add range to shopping</button><button id="calClose">Close</button></div>
+</dialog>
+
+<dialog id="dPantry">
+  <h2 style="margin-top:0">Pantry</h2>
+  <p class="small">Mark items you have. “Have” items are subtracted when building shopping lists and used for “What can I cook?”.</p>
+  <div class="grid2">
+    <div><label for="pantryIn">Item</label><input id="pantryIn" placeholder="e.g. eggs"></div>
+    <div><label for="pantryCost">Cost (optional)</label><input id="pantryCost" placeholder="0.00"></div>
+  </div>
+  <div class="row" style="justify-content:flex-start"><button id="pantryAdd">Add pantry item</button></div>
+  <div id="pantryList" class="listbox"></div>
+  <div class="row"><button id="pantryClose">Close</button></div>
+</dialog>
+
+<dialog id="dHistory">
+  <h2 style="margin-top:0">History &amp; trash</h2>
+  <div class="panel"><strong>Trash (recently deleted)</strong><div id="trashList" class="listbox"></div></div>
+  <div class="panel"><strong>Import / activity history</strong><div id="histList" class="listbox"></div></div>
+  <div class="panel"><strong>Change log</strong><div id="chgList" class="listbox"></div></div>
+  <div class="panel"><strong>Cooking log</strong><div id="cookLogList" class="listbox"></div></div>
+  <div class="row"><button id="histClear">Clear history</button><button id="histClose">Close</button></div>
+</dialog>
+
+<dialog id="dTimers">
+  <h2 style="margin-top:0">Timers</h2>
+  <div class="panel">
+    <div class="grid2">
+      <div><label for="timerLabel">Timer name</label><input id="timerLabel" placeholder="e.g. pasta"></div>
+      <div><label for="timerMin">Minutes</label><input id="timerMin" type="number" min="0.1" step="0.5" placeholder="10"></div>
+    </div>
+    <div class="row" style="justify-content:flex-start"><button class="primary" id="timerAddBtn">Start timer</button></div>
+  </div>
+  <div class="panel"><strong>Active timers</strong><div id="timerList" class="listbox"></div></div>
+  <div class="row"><button id="timerClearDone">Clear finished</button><button id="timerClose">Close</button></div>
+</dialog>
+
+<div id="timerBar" class="timerbar" style="display:none"></div>
+
+<dialog id="dFile">
+  <h2 style="margin-top:0">Linked data file</h2>
+  <p class="small">Optionally link a local JSON file for saves/loads (browser support varies). Data also stays in browser storage.</p>
+  <div id="fileStatus" class="status"></div>
+  <div class="row" style="justify-content:flex-start;flex-wrap:wrap"><button id="fileOpen">Open/link file</button><button id="fileSaveAs">Save as / link new</button><button id="fileSaveNow">Save now</button><button id="fileUnlink" class="danger">Unlink</button></div>
+  <div class="panel" style="margin-top:12px">
+    <div class="row spread" style="margin:0 0 6px"><strong>Local backups (this browser)</strong><button id="localBackupNow">Back up now</button></div>
+    <div id="localBackupList" class="listbox"></div>
+    <p class="hint">Up to 6 rotating local backups are kept in this browser, including photos. They survive server mistakes but not cleared browser data - export a JSON backup too.</p>
+  </div>
+  <div class="row"><button id="fileClose">Close</button></div>
+</dialog>
+
+<dialog id="dSync">
+  <h2 style="margin-top:0">Sync</h2>
+  <p class="small">Sync with local server (<code>server.js</code>) or compatible endpoint. Token/passphrase stay in this browser.</p>
+  <div id="syncStatus" class="status"></div>
+  <div class="panel small" id="syncServerInfo"></div>
+  <label for="syncDevice">This device's name</label><input id="syncDevice" placeholder="e.g. Kitchen laptop">
+  <label for="syncUrl">Server URL</label><input id="syncUrl" placeholder="http://localhost:8787/api/recipebox">
+  <label for="syncToken">Bearer token (optional, if server uses RECIPEBOX_TOKEN)</label><input id="syncToken" type="password" autocomplete="off">
+  <label for="syncPass">Encryption passphrase (optional — AES-GCM; blank = plain JSON)</label><input id="syncPass" type="password" autocomplete="new-password">
+  <p id="syncEncInfo" class="hint">Encryption: off (data is stored as plain JSON).</p>
+  <p class="hint">When set, the same passphrase encrypts sync pushes, linked-file saves and JSON exports/backups. It stays in this browser and is never sent to the server — there is no password recovery.</p>
+  <label class="ck" style="margin:8px 0"><input type="checkbox" id="syncAuto"> Auto-sync on changes</label>
+  <div class="row" style="justify-content:flex-start;flex-wrap:wrap"><button id="syncSaveCfg">Save settings</button><button id="syncPush">Push now</button><button id="syncPull">Pull now</button></div>
+  <div class="panel" style="margin-top:12px">
+    <strong>Rolling server versions</strong>
+    <div id="versionStatus" class="small">Push data to create history on the server.</div>
+    <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+      <select id="versionSel" style="flex:1;min-width:200px"></select>
+      <button id="versionRefresh">Refresh</button>
+      <button id="versionRestore">Preview / restore</button>
+    </div>
+    <p class="hint">The server keeps the last 20 previous datasets. Restoring shows the same merge/compare preview as a pull.</p>
+  </div>
+  <div class="row"><button id="syncClose">Close</button></div>
+</dialog>
+
+<dialog id="dSyncConflict">
+  <h2 style="margin-top:0">Sync conflict</h2>
+  <p class="small">Server data differs from this browser. Compare the sections, then choose what to keep. “Merge” keeps both sides (newest recipe edits win).</p>
+  <div id="syncCompare" class="panel small"></div>
+  <div id="syncWarn" class="status"></div>
+  <div class="row"><button id="scCancel">Cancel</button><button id="scLocal">Keep local</button><button id="scRemote">Use remote</button><button class="primary" id="scMerge">Merge remote into local</button></div>
+</dialog>
+
+<dialog id="dSet">
+  <h2 style="margin-top:0">AI / Settings</h2>
+  <p class="small">OpenRouter API key is stored only in this browser and sent only to OpenRouter for AI features.</p>
+  <div id="sStatus" class="status"></div>
+  <label for="sKey">OpenRouter API key</label><input id="sKey" type="password" autocomplete="off" placeholder="sk-or-...">
+  <label for="sModel">Model (vision-capable for images/PDF scans)</label><input id="sModel" placeholder="openai/gpt-4o-mini">
+  <div class="row" style="justify-content:flex-start;flex-wrap:wrap"><button id="sTest">Test</button><button id="sClear" class="danger">Remove key</button></div>
+  <div class="panel small" style="margin-top:12px">
+    <strong>Storage &amp; backups</strong>
+    <div id="storageDetail" class="small"></div>
+    <div class="row" style="justify-content:flex-start;flex-wrap:wrap"><button id="sCheckStorage">Check storage</button><button id="sBackupNow">Back up now</button><button id="sOpenBackups">Local backups</button></div>
+    <p class="hint">Photos live in IndexedDB. Local backups are kept in this browser; use Export for a portable full backup.</p>
+  </div>
+  <div class="row"><button id="sCancel">Cancel</button><button class="primary" id="sSave">Save</button></div>
+</dialog>
+
+<div id="updateBar" class="updatebar no-print" style="display:none" role="status" aria-live="polite">
+  <span id="updateText">A new version of Recipe Box is ready.</span>
+  <button id="updateNow" class="primary">Reload to update</button>
+  <button id="updateLater">Later</button>
+</div>
+<div class="toast" id="toast"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+// Offline/CDN resilience: try a second host for pdf.js if the first is blocked or offline.
+(function(){
+  if(window.pdfjsLib)return;
+  var s=document.createElement('script');
+  s.src='https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js';
+  s.onload=function(){try{if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc='https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js'}catch(e){}};
+  document.head.appendChild(s);
+})();
+</script>
+<script src="app.js"></script>
+<script src="features-store.js"></script>
+<script src="features-plan.js"></script>
+<script src="features-content.js"></script>
+<script src="features-sync.js"></script>
+<script src="features-camera.js"></script>
+<script src="features-recs.js"></script>
+<script src="features-subs.js"></script>
+<script src="features-shelf.js"></script>
+<script src="features-cards.js"></script>
+<script src="features-review.js"></script>
+<script src="features-prep.js"></script>
+<script src="features-search.js"></script>
+<script src="features-diff.js"></script>
+<script src="features-offline.js"></script>
+<script src="features-import.js"></script>
+<script>
+// Service worker + explicit update prompt (works with the UpdateBar above).
+(function(){
+  if(!('serviceWorker' in navigator))return;
+  var waiting=null, refreshing=false;
+  function showUpdate(){var b=document.getElementById('updateBar'); if(b)b.style.display='flex'}
+  function hideUpdate(){var b=document.getElementById('updateBar'); if(b)b.style.display='none'}
+  function track(worker){
+    if(!worker)return;
+    worker.addEventListener('statechange',function(){
+      if(worker.state==='installed' && navigator.serviceWorker.controller){waiting=worker; showUpdate()}
+    });
+  }
+  window.addEventListener('load',function(){
+    navigator.serviceWorker.register('./sw.js').then(function(reg){
+      if(reg.waiting && navigator.serviceWorker.controller){waiting=reg.waiting; showUpdate()}
+      track(reg.installing);
+      reg.addEventListener('updatefound',function(){track(reg.installing)});
+      // Check for a new version periodically while the app stays open.
+      setInterval(function(){reg.update().catch(function(){})}, 30*60*1000);
+    }).catch(function(){});
+    navigator.serviceWorker.addEventListener('controllerchange',function(){if(refreshing)location.reload()});
+    var now=document.getElementById('updateNow');
+    if(now)now.onclick=function(){if(waiting){refreshing=true; waiting.postMessage({type:'SKIP_WAITING'})}else location.reload()};
+    var later=document.getElementById('updateLater');
+    if(later)later.onclick=hideUpdate;
+    navigator.serviceWorker.addEventListener('message',function(e){if(e.data&&e.data.type==='SW_UPDATED'&&!waiting){/* reloaded already */}});
+  });
+})();
+</script>
+</body>
+</html>
