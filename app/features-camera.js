@@ -462,8 +462,19 @@ function camPickImageFiles() {
     function finish(files) {
       if (settled) return;
       settled = true;
+      window.removeEventListener('focus', onFocus);
       try { if (input.parentNode) input.parentNode.removeChild(input); } catch (e) {}
       resolve(files || []);
+    }
+
+    // Some browsers - iOS Safari in particular - fire neither 'change' nor
+    // 'cancel' when the camera sheet is dismissed. When the page comes back
+    // into focus with no files selected, wait a moment for 'change' and then
+    // treat it as a cancel so the dialog does not lock up.
+    function onFocus() {
+      setTimeout(function () {
+        if (!settled && !(input.files && input.files.length)) finish([]);
+      }, 800);
     }
 
     input.addEventListener('change', function () {
@@ -471,6 +482,7 @@ function camPickImageFiles() {
     });
     // Chrome fires 'cancel' when the picker is dismissed without a choice.
     input.addEventListener('cancel', function () { finish([]); });
+    window.addEventListener('focus', onFocus);
 
     input.click();
   });
