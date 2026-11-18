@@ -11,10 +11,10 @@ one port, with data stored on your NAS.
 
 ```bash
 docker build -t zimaos-recipe-box .
-docker run -d -p 8190:8080 -v /DATA/AppData/recipebox:/data --name recipe-box zimaos-recipe-box
+docker run -d -p 8197:8080 -v /DATA/AppData/recipebox:/data --name recipe-box zimaos-recipe-box
 ```
 
-Open `http://<host>:8190`. Add an OpenRouter key in **Settings** for AI import
+Open `http://<host>:8197`. Add an OpenRouter key in **Settings** for AI import
 (websites, photos, PDFs, pasted text). Without a key, manual recipes, meal
 planning, shopping lists and local backups all still work.
 

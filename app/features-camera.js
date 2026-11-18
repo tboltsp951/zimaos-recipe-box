@@ -438,14 +438,217 @@ function camAiRecipe(parts) {
   return aiRecipe(parts, {});
 }
 
+/* ---------------------------------------------------------------- fallback
+   getUserMedia only exists in a secure context. Served over plain http from a
+   LAN address - which is how the Docker/ZimaOS install is normally reached -
+   the browser hides navigator.mediaDevices entirely, so the live preview
+   cannot open. A file input is not gated by that rule, and `capture` asks a
+   phone to open its camera app, so photos can still be taken. Only the preview
+   extras (torch, grid, timer, camera picker) are lost. */
+
+function camPickImageFiles() {
+  return new Promise(function (resolve) {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.multiple = true;
+    input.setAttribute('capture', 'environment');
+    input.setAttribute('data-cam-fallback', '1');
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    document.body.appendChild(input);
+
+    var settled = false;
+    function finish(files) {
+      if (settled) return;
+      settled = true;
+      try { if (input.parentNode) input.parentNode.removeChild(input); } catch (e) {}
+      resolve(files || []);
+    }
+
+    input.addEventListener('change', function () {
+      finish(Array.prototype.slice.call(input.files || []));
+    });
+    // Chrome fires 'cancel' when the picker is dismissed without a choice.
+    input.addEventListener('cancel', function () { finish([]); });
+
+    input.click();
+  });
+}
+
+function camReadFile(file) {
+  return new Promise(function (resolve, reject) {
+    var fr = new FileReader();
+    fr.onload = function () { resolve(String(fr.result || '')); };
+    fr.onerror = function () { reject(fr.error || new Error('Could not read ' + file.name)); };
+    fr.readAsDataURL(file);
+  });
+}
+
+/* Match the live-camera pipeline: cap the long edge, then apply the optional
+   contrast boost. Phone photos are usually much larger than the capture cap. */
+function camScaleDataUrl(dataUrl, mode) {
+  return new Promise(function (resolve) {
+    var img = new Image();
+    img.onload = function () {
+      var w = img.naturalWidth || img.width;
+      var h = img.naturalHeight || img.height;
+      if (!w || !h) { resolve(dataUrl); return; }
+      var k = Math.min(1, CAM_MAX_EDGE / Math.max(w, h));
+      var c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(w * k));
+      c.height = Math.max(1, Math.round(h * k));
+      var ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      try { resolve(camBoostCanvas(c, mode || 'plain').toDataURL('image/jpeg', CAM_JPEG_QUALITY)); }
+      catch (e) { resolve(dataUrl); }
+    };
+    img.onerror = function () { resolve(dataUrl); };
+    img.src = dataUrl;
+  });
+}
+
+async function camFilesToPhotos(files, mode) {
+  var out = [];
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    if (!f) continue;
+    if (f.type && !/^image\//.test(f.type)) continue;
+    var dataUrl = await camReadFile(f);
+    if (!dataUrl) continue;
+    out.push({ url: await camScaleDataUrl(dataUrl, mode), taken: Date.now() });
+  }
+  return out;
+}
+
+/* Dialog used instead of the live preview when mediaDevices is unavailable.
+   Resolves with { photos, handwriting } on Done, or null if cancelled. */
+function camOpenFallbackDialog() {
+  return new Promise(function (resolve) {
+    var photos = [];
+    var settled = false;
+
+    var dlg = document.createElement('dialog');
+    dlg.id = 'camFallbackDialog';
+    dlg.className = 'cam-dialog';
+    dlg.innerHTML =
+      '<h2 style="margin-top:0">Take recipe photos</h2>' +
+      '<p class="small">This page is on plain <code>http</code>, so there is no live preview. Your device camera app will open instead - take the photo, then come back. Add each page of the recipe.</p>' +
+      '<p class="hint">Preview, torch, grid and the timer need <code>https</code> or <code>localhost</code>. Taking photos and reading them with AI work fine here.</p>' +
+      '<div class="cam-tools">' +
+      '<label for="camFbMode" style="margin:0">Capture</label>' +
+      '<select id="camFbMode" style="width:auto;padding:3px 6px;font-size:.84rem">' +
+      Object.keys(CAM_MODES).map(function (k) { return '<option value="' + k + '">' + CAM_MODES[k] + '</option>'; }).join('') +
+      '</select></div>' +
+      '<label class="ck" style="margin:6px 0"><input type="checkbox" id="camFbHand"> This is a handwritten recipe card</label>' +
+      '<p class="hint" style="margin:0 0 6px">Leave this off for printed pages. Turn it on for handwriting so uncertain words are marked <code>[?]</code> instead of guessed.</p>' +
+      '<div class="cam-count" id="camFbCount">0 photo(s) added</div>' +
+      '<div class="cam-strip" id="camFbStrip"></div>' +
+      '<div class="row" style="justify-content:flex-start;flex-wrap:wrap">' +
+      '<button class="primary" id="camFbAdd">Open camera</button>' +
+      '<button id="camFbDone" disabled>Use photos</button>' +
+      '<button class="danger" id="camFbRetake" disabled>Start over</button>' +
+      '<button id="camFbCancel">Cancel</button></div>';
+
+    document.body.appendChild(dlg);
+
+    var strip = dlg.querySelector('#camFbStrip');
+    var countEl = dlg.querySelector('#camFbCount');
+    var addBtn = dlg.querySelector('#camFbAdd');
+    var doneBtn = dlg.querySelector('#camFbDone');
+    var retakeBtn = dlg.querySelector('#camFbRetake');
+    var cancelBtn = dlg.querySelector('#camFbCancel');
+    var modeEl = dlg.querySelector('#camFbMode');
+
+    function label() {
+      countEl.textContent = photos.length + ' of ' + CAM_MAX_PHOTOS + ' photo(s) added';
+      doneBtn.textContent = photos.length ? ('Use ' + photos.length + ' photo(s)') : 'Use photos';
+      doneBtn.disabled = photos.length === 0;
+      retakeBtn.disabled = photos.length === 0;
+      addBtn.disabled = photos.length >= CAM_MAX_PHOTOS;
+    }
+
+    function renderStrip() {
+      strip.innerHTML = '';
+      photos.forEach(function (p, i) {
+        var wrap = document.createElement('div');
+        wrap.className = 'cam-thumb';
+        var img = document.createElement('img');
+        img.src = p.url;
+        img.alt = 'Photo ' + (i + 1);
+        var num = document.createElement('span');
+        num.className = 'cam-thumb-num';
+        num.textContent = String(i + 1);
+        var del = document.createElement('button');
+        del.type = 'button';
+        del.textContent = '×';
+        del.setAttribute('aria-label', 'Remove photo ' + (i + 1));
+        del.onclick = function () { photos.splice(i, 1); renderStrip(); label(); };
+        wrap.appendChild(img);
+        wrap.appendChild(num);
+        wrap.appendChild(del);
+        strip.appendChild(wrap);
+      });
+    }
+
+    addBtn.onclick = async function () {
+      if (photos.length >= CAM_MAX_PHOTOS) return;
+      addBtn.disabled = true;
+      try {
+        var files = await camPickImageFiles();
+        if (settled || !files.length) return;
+        var mode = modeEl ? modeEl.value : 'plain';
+        var added = await camFilesToPhotos(files, mode);
+        if (settled) return;
+        var room = CAM_MAX_PHOTOS - photos.length;
+        added.slice(0, room).forEach(function (p) { photos.push(p); });
+        renderStrip();
+        label();
+      } catch (e) {
+        camStatus(e.message || String(e), 'err');
+      } finally {
+        if (!settled) addBtn.disabled = photos.length >= CAM_MAX_PHOTOS;
+      }
+    };
+
+    doneBtn.onclick = function () {
+      if (!photos.length) { camStatus('Add at least one photo first.', 'err'); return; }
+      var handEl = dlg.querySelector('#camFbHand');
+      finish({ photos: photos.slice(), handwriting: !!(handEl && handEl.checked) });
+    };
+
+    retakeBtn.onclick = function () { photos = []; renderStrip(); label(); };
+    cancelBtn.onclick = function () { finish(null); };
+
+    function finish(value) {
+      if (settled) return;
+      settled = true;
+      try { dlg.close(); } catch (e) {}
+      if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      resolve(value);
+    }
+
+    // Escape / backdrop close.
+    dlg.addEventListener('close', function () {
+      if (settled) return;
+      settled = true;
+      if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      resolve(null);
+    });
+    dlg.addEventListener('cancel', function (e) { e.preventDefault(); finish(null); });
+
+    renderStrip();
+    label();
+    try { dlg.showModal(); } catch (e) { finish(null); return; }
+  });
+}
+
 /* Main entry point wired to the #cameraCapture button. */
 async function captureRecipeWithCamera() {
   if (!aiCfg().key) {
     camStatus('Add an OpenRouter key in Settings to read photos with AI.', 'err');
-    return;
-  }
-  if (!camHasMediaDevices()) {
-    camStatus('This browser cannot open a camera here. Camera access needs https or localhost, and a browser with mediaDevices support.', 'err');
     return;
   }
 
@@ -454,8 +657,16 @@ async function captureRecipeWithCamera() {
   if (btn) { btn.disabled = true; btn.textContent = 'Opening camera…'; }
 
   try {
-    var devices = await camListDevices();
-    var result = await camOpenPreview(devices, 0);
+    var result;
+    if (camHasMediaDevices()) {
+      var devices = await camListDevices();
+      result = await camOpenPreview(devices, 0);
+    } else {
+      // Plain http on a LAN address: no live preview, but the device camera can
+      // still supply photos, so do not dead-end the user here.
+      camStatus('No live preview over plain http - opening your device camera instead.');
+      result = await camOpenFallbackDialog();
+    }
 
     if (btn) { btn.disabled = false; btn.textContent = oldLabel || 'Capture with Camera'; }
     if (!result || !result.photos.length) {
