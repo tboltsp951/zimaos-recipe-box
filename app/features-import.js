@@ -39,11 +39,18 @@ function diagExplain(d) {
   var serverMissing = d.attempts.some(function (a) { return /route not available/i.test(a.detail || ''); });
   if (serverMissing) {
     lines.push('This build has no server fetch route, so only public relays were tried.');
-    lines.push('Next: update Recipe Box on your box to 1.0.2 or later, which fetches pages from your own network.');
+    lines.push('Next: update Recipe Box on your box to 1.0.4 or later, which fetches pages from your own network.');
   } else {
     lines.push(triedServer
       ? 'Your Recipe Box server tried it from your own network too, so the block is on the site side.'
       : 'The Recipe Box server route was not reachable (a static copy of the app?), so only public relays were tried.');
+  }
+
+  var ipBlocked = d.attempts.some(function (a) {
+    return /server/.test(a.name) && /upstream HTTP (402|403)/i.test(a.detail || '');
+  });
+  if (ipBlocked) {
+    lines.push('The site refused your box\'s own internet address (403). Recipe Box 1.0.4+ retries through a translated copy of the page, which uses a different server; update if you are on an older build.');
   }
 
   if (kinds.blocked) {

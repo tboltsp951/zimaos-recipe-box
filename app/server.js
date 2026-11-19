@@ -319,11 +319,49 @@ async function httpGetText(target, timeoutMs, maxBytes) {
   }
 }
 
+// A site can block the address of the box itself, which no amount of browser-like
+// headers fixes. Google's translate proxy fetches the page from a different IP
+// and returns the same HTML (with rewritten links), so retry through it before
+// giving up. The JSON-LD recipe data is left intact.
+function translateMirror(href) {
+  let u;
+  try { u = new URL(String(href)); } catch (e) { return ''; }
+  if (u.protocol !== 'https:' || /\.translate\.goog$/i.test(u.hostname)) return '';
+  const host = u.hostname.toLowerCase().replace(/\./g, '-');
+  const mirror = new URL('https://' + host + '.translate.goog' + u.pathname);
+  u.searchParams.forEach((v, k) => mirror.searchParams.append(k, v));
+  mirror.searchParams.set('_x_tr_sl', 'auto');
+  mirror.searchParams.set('_x_tr_tl', 'en');
+  mirror.searchParams.set('_x_tr_hl', 'en');
+  return mirror.href;
+}
+
 async function fetchPageHtml(raw) {
   let current = String(raw);
+  let triedMirror = false;
   for (let hop = 0; hop < 6; hop++) {
     const target = await assertPublicHttpUrl(current);
-    const out = await httpGetText(target, FETCH_TIMEOUT_MS, FETCH_MAX_BYTES);
+    let out;
+    try {
+      out = await httpGetText(target, FETCH_TIMEOUT_MS, FETCH_MAX_BYTES);
+    } catch (e) {
+      // Only retry real fetch failures; a refused private address or an invalid
+      // URL must stay an immediate error. The mirror is tried once, only for a
+      // direct https fetch, and its own failure is never mirrored again.
+      const msg = String((e && e.message) || e);
+      const fetchFailure = /^(upstream HTTP|timed out|could not reach the site)/.test(msg);
+      const mirror = triedMirror ? '' : translateMirror(target.href);
+      if (!fetchFailure || !mirror) throw e;
+      triedMirror = true;
+      try {
+        const mirrored = await assertPublicHttpUrl(mirror);
+        const alt = await httpGetText(mirrored, FETCH_TIMEOUT_MS, FETCH_MAX_BYTES);
+        if (alt && !alt.redirect) return Object.assign({}, alt, { via: 'translate' });
+      } catch (e2) {
+        // Keep the original error: it explains why the direct fetch failed.
+      }
+      throw e;
+    }
     if (out && out.redirect) { current = out.redirect; continue; }
     return out;
   }
@@ -463,11 +501,16 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-ensure();
-server.listen(PORT, HOST, () => {
-  console.log(`Recipe Box listening on http://${HOST}:${PORT}`);
-  console.log(`Serving PWA from ${WWW_DIR}`);
-  console.log(`Data file: ${DATA_FILE}`);
-  console.log(`Import fetch proxy: /api/recipebox/fetch?url=...`);
-  console.log(TOKEN ? 'Auth: Bearer token required for /api/*' : 'Auth: none (set RECIPEBOX_TOKEN to require)');
-});
+// Exported so the fetch helpers can be unit tested without starting a server.
+module.exports = { fetchPageHtml, translateMirror, isPrivateAddress, assertPublicHttpUrl };
+
+if (require.main === module) {
+  ensure();
+  server.listen(PORT, HOST, () => {
+    console.log(`Recipe Box listening on http://${HOST}:${PORT}`);
+    console.log(`Serving PWA from ${WWW_DIR}`);
+    console.log(`Data file: ${DATA_FILE}`);
+    console.log(`Import fetch proxy: /api/recipebox/fetch?url=...`);
+    console.log(TOKEN ? 'Auth: Bearer token required for /api/*' : 'Auth: none (set RECIPEBOX_TOKEN to require)');
+  });
+}
