@@ -35,6 +35,10 @@ function diagExplain(d) {
 
   var lines = [];
   lines.push('Tried ' + names.join(', ') + '.');
+  var triedServer = names.some(function (n) { return /^server/.test(n); });
+  lines.push(triedServer
+    ? 'Your Recipe Box server tried it from your own network too, so the block is on the site side.'
+    : 'The Recipe Box server route was not reachable (a static copy of the app?), so only public relays were tried.');
 
   if (kinds.blocked) {
     lines.push('The page answered but looked like a bot-check or error page (Cloudflare / "are you a robot" / captcha).');
@@ -56,6 +60,7 @@ function diagExplain(d) {
 
   // If only one relay worked, name it so retries can be quicker.
   if (kinds.ok) lines.unshift('Loaded via ' + names[names.length - 1] + '.');
+
   return lines.join(' ');
 }
 

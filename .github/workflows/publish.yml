@@ -40,7 +40,7 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:1.0.1
+            ${{ env.IMAGE }}:1.0.2
             ${{ env.IMAGE }}:${{ github.sha }}
 
       - name: Smoke test the image
@@ -54,4 +54,8 @@ jobs:
           echo
           curl -fsS http://127.0.0.1:8099/ | grep -q "Recipe Box"
           echo "PWA index served"
+          # The import proxy must exist and reject non-http(s) targets.
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8099/api/recipebox/fetch?url=notaurl")
+          echo "fetch route answered $code"
+          test "$code" = "400"
           docker rm -f rbx

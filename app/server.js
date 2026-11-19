@@ -1,16 +1,23 @@
-// Recipe Box - single-port server for container deployments.
+// Recipe Box - single-port server for local and container deployments.
 //
 // Serves the PWA bundle AND the sync API on one port, so the ZimaOS/CasaOS
-// store only has to publish a single port. Data lives in RECIPEBOX_DATA so it
-// can sit on a persistent volume.
+// store only has to publish a single port. Data lives in DATA_DIR /
+// RECIPEBOX_DATA so it can sit on a persistent volume.
 //
 // Binds 0.0.0.0 by default, which is required inside a container.
+//
+// It also proxies recipe-page fetches: browsers cannot read most recipe sites
+// (CORS) and public relays are frequently blocked, but this process fetches
+// from the user's own network, which the sites normally allow.
 
 const http = require('http');
+const http2 = require('http2');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const dns = require('dns');
 
-const PORT = parseInt(process.env.PORT || '8080', 10);
+const PORT = parseInt(process.env.PORT || '8787', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 const TOKEN = process.env.RECIPEBOX_TOKEN || '';
 // The container sets DATA_DIR (matching the other zimaos apps); RECIPEBOX_DATA
@@ -124,6 +131,205 @@ function saveVersion(obj) {
   }
 }
 
+// ---- Import fetch proxy --------------------------------------------------
+// The PWA asks for a page; this process loads it with browser-like headers and
+// returns the HTML. Requests to private/loopback addresses are refused so the
+// endpoint cannot be used to probe the local network (SSRF).
+
+const FETCH_TIMEOUT_MS = 15000;
+const FETCH_MAX_BYTES = 6 * 1024 * 1024;
+const FETCH_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Cache-Control': 'no-cache',
+  'Upgrade-Insecure-Requests': '1'
+};
+
+function isPrivateAddress(ip) {
+  if (!ip) return true;
+  let v = String(ip).toLowerCase().replace(/^\[|\]$/g, '');
+  if (v.indexOf('::ffff:') === 0) v = v.slice(7);
+  if (v === '::1' || v === '::' || v === '0.0.0.0') return true;
+  if (/^f[cd]/.test(v) || /^fe[89ab]/.test(v)) return true; // ULA and link-local
+  const m = v.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;
+  const a = +m[1], b = +m[2];
+  return a === 0 || a === 10 || a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    a >= 224;
+}
+
+async function assertPublicHttpUrl(raw) {
+  let u;
+  try { u = new URL(String(raw)); } catch (e) { throw new Error('invalid url'); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('only http(s) urls are allowed');
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) throw new Error('invalid url');
+  if (host === 'localhost' || /\.(local|internal|home\.arpa|lan)$/.test(host)) {
+    throw new Error('local addresses are not allowed');
+  }
+  const literal = /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.indexOf(':') > -1;
+  let addrs;
+  if (literal) {
+    addrs = [host];
+  } else {
+    try { addrs = (await dns.promises.lookup(host, { all: true })).map(a => a.address); }
+    catch (e) { throw new Error('could not resolve ' + host); }
+  }
+  if (!addrs.length) throw new Error('could not resolve ' + host);
+  for (const a of addrs) {
+    if (isPrivateAddress(a)) throw new Error('local addresses are not allowed');
+  }
+  return u;
+}
+
+// Some CDNs (Akamai in front of Allrecipes, for example) answer HTTP/1.1 with
+// 402 Payment Required and only serve the page over HTTP/2, which Node's fetch
+// does not use. Talk HTTP/2 for https, then fall back to HTTP/1.1 for plain http
+// and for sites that do not negotiate h2, so the proxy behaves like a browser.
+function http1Get(target, timeoutMs, maxBytes) {
+  const lib = target.protocol === 'https:' ? https : http;
+  return new Promise(function (resolve, reject) {
+    let settled = false, req = null, status = 0, head = {}, total = 0;
+    const chunks = [];
+
+    function finish(err, value) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { if (req) req.destroy(); } catch (e) {}
+      if (err) reject(err); else resolve(value);
+    }
+
+    const timer = setTimeout(function () {
+      finish(new Error('timed out after ' + Math.round(timeoutMs / 1000) + 's'));
+    }, timeoutMs);
+
+    function fail(e) {
+      finish(new Error('could not reach the site (' + ((e && e.message) || e) + ')'));
+    }
+
+    req = lib.request(target, { method: 'GET', headers: FETCH_HEADERS }, function (res) {
+      status = res.statusCode || 0;
+      head = res.headers || {};
+      const declared = parseInt(head['content-length'] || '0', 10);
+      if (declared && declared > maxBytes) return finish(new Error('page too large'));
+      if (status >= 300 && status < 400 && head['location']) {
+        return finish(null, { redirect: new URL(String(head['location']), target.href).href });
+      }
+      if (status < 200 || status >= 300) return finish(new Error('upstream HTTP ' + status));
+      res.on('data', function (chunk) {
+        total += chunk.length;
+        if (total > maxBytes) { finish(new Error('page too large')); res.destroy(); return; }
+        chunks.push(chunk);
+      });
+      res.on('end', function () {
+        const type = String(head['content-type'] || '');
+        const html = Buffer.concat(chunks).toString('utf8');
+        if (!/html|xml|text/i.test(type) && !/<html|<!doctype/i.test(html.slice(0, 500))) {
+          return finish(new Error('not an HTML page (' + (type || 'unknown type') + ')'));
+        }
+        finish(null, { status: status, url: target.href, contentType: type, html: html });
+      });
+      res.on('error', fail);
+    });
+    req.on('error', fail);
+    req.end();
+  });
+}
+
+function http2Get(target, timeoutMs, maxBytes) {
+  return new Promise(function (resolve, reject) {
+    let settled = false, session = null, req = null, status = 0, head = {}, total = 0;
+    const chunks = [];
+
+    function finish(err, value) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { if (req && req.destroy) req.destroy(); } catch (e) {}
+      try { if (session) session.close(); } catch (e) {}
+      if (err) reject(err); else resolve(value);
+    }
+
+    const timer = setTimeout(function () {
+      finish(new Error('timed out after ' + Math.round(timeoutMs / 1000) + 's'));
+    }, timeoutMs);
+
+    // Connection-level failures can be retried over HTTP/1.1.
+    function retryable(e) {
+      const err = new Error('could not reach the site (' + ((e && e.message) || e) + ')');
+      err.retryable = true;
+      finish(err);
+    }
+
+    try {
+      session = http2.connect(target.origin);
+      session.on('error', retryable);
+      // Only :method and :path. Node fills :scheme/:authority itself; sending
+      // them explicitly makes Akamai answer 402.
+      req = session.request(Object.assign({
+        ':method': 'GET',
+        ':path': target.pathname + target.search
+      }, FETCH_HEADERS));
+      req.on('response', function (h) {
+        status = h[':status'] || 0;
+        head = h;
+        const declared = parseInt(head['content-length'] || '0', 10);
+        if (declared && declared > maxBytes) return finish(new Error('page too large'));
+        if (status >= 300 && status < 400 && head['location']) {
+          return finish(null, { redirect: new URL(String(head['location']), target.href).href });
+        }
+        if (status < 200 || status >= 300) return finish(new Error('upstream HTTP ' + status));
+      });
+      req.on('data', function (chunk) {
+        total += chunk.length;
+        if (total > maxBytes) return finish(new Error('page too large'));
+        chunks.push(chunk);
+      });
+      req.on('end', function () {
+        if (settled) return;
+        const type = String(head['content-type'] || '');
+        const html = Buffer.concat(chunks).toString('utf8');
+        if (!/html|xml|text/i.test(type) && !/<html|<!doctype/i.test(html.slice(0, 500))) {
+          return finish(new Error('not an HTML page (' + (type || 'unknown type') + ')'));
+        }
+        finish(null, { status: status, url: target.href, contentType: type, html: html });
+      });
+      req.on('error', retryable);
+      req.end();
+    } catch (e) {
+      retryable(e);
+    }
+  });
+}
+
+async function httpGetText(target, timeoutMs, maxBytes) {
+  if (target.protocol !== 'https:') return http1Get(target, timeoutMs, maxBytes);
+  try {
+    return await http2Get(target, timeoutMs, maxBytes);
+  } catch (e) {
+    // Real HTTP responses are not retried; only connection/protocol failures.
+    if (!e || !e.retryable) throw e;
+    return http1Get(target, timeoutMs, maxBytes);
+  }
+}
+
+async function fetchPageHtml(raw) {
+  let current = String(raw);
+  for (let hop = 0; hop < 6; hop++) {
+    const target = await assertPublicHttpUrl(current);
+    const out = await httpGetText(target, FETCH_TIMEOUT_MS, FETCH_MAX_BYTES);
+    if (out && out.redirect) { current = out.redirect; continue; }
+    return out;
+  }
+  throw new Error('too many redirects');
+}
+
 function serveStatic(req, res, pathname) {
   let rel = decodeURIComponent(pathname);
   if (rel === '/' || rel === '') rel = '/index.html';
@@ -167,7 +373,9 @@ const server = http.createServer(async (req, res) => {
 
     const isApi = url.pathname === '/api/recipebox' || url.pathname.startsWith('/api/recipebox/');
 
-    if (TOKEN) {
+    // The token protects the API only; the PWA itself must stay loadable so the
+    // browser can present the token it was configured with.
+    if (TOKEN && isApi) {
       const auth = req.headers['authorization'] || '';
       if (auth !== 'Bearer ' + TOKEN) return sendJson(res, 401, { error: 'unauthorized' });
     }
@@ -183,12 +391,28 @@ const server = http.createServer(async (req, res) => {
         syncedAt: data.syncedAt || null,
         device: data.device || null,
         encrypted: !!data.enc,
+        fetch: true,
         counts: {
           recipes: Array.isArray(data.recipes) ? data.recipes.length : 0,
           tombstones: Array.isArray(data.tombstones) ? data.tombstones.length : 0,
           versions: listVersions().length
         }
       });
+    }
+
+    if (url.pathname === '/api/recipebox/fetch' && req.method === 'GET') {
+      const target = url.searchParams.get('url') || '';
+      if (!/^https?:\/\//i.test(target)) {
+        return sendJson(res, 400, { ok: false, error: 'url must start with http:// or https://' });
+      }
+      try {
+        const page = await fetchPageHtml(target);
+        return sendJson(res, 200, Object.assign({ ok: true }, page));
+      } catch (e) {
+        const msg = e && e.message ? e.message : 'fetch failed';
+        const code = /not allowed|invalid url|only http/i.test(msg) ? 400 : 502;
+        return sendJson(res, code, { ok: false, error: msg });
+      }
     }
 
     if (url.pathname === '/api/recipebox/versions' && req.method === 'GET') {
@@ -244,5 +468,6 @@ server.listen(PORT, HOST, () => {
   console.log(`Recipe Box listening on http://${HOST}:${PORT}`);
   console.log(`Serving PWA from ${WWW_DIR}`);
   console.log(`Data file: ${DATA_FILE}`);
-  console.log(TOKEN ? 'Auth: Bearer token required' : 'Auth: none (set RECIPEBOX_TOKEN to require)');
+  console.log(`Import fetch proxy: /api/recipebox/fetch?url=...`);
+  console.log(TOKEN ? 'Auth: Bearer token required for /api/*' : 'Auth: none (set RECIPEBOX_TOKEN to require)');
 });

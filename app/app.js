@@ -177,13 +177,45 @@ async function addImported(list,defCats,meta){var n=0,dups=[]; for(var i=0;i<(li
 
 async function fetchWithTimeout(url,ms,opts){var ctrl=new AbortController(),timer=setTimeout(function(){ctrl.abort()},ms||15000); try{var res=await fetch(url,Object.assign({signal:ctrl.signal},opts||{})); clearTimeout(timer); return res}catch(e){clearTimeout(timer); throw e}}
 function looksBlockedPage(text,url){var t=String(text||'').slice(0,4000).toLowerCase(); if(/warning:\s*target url returned error 403/.test(t))return true; if(/this site is experiencing a problem/.test(t)&&/reference id/.test(t))return true; if(/access denied|request blocked|temporarily unavailable|are you a robot|verify you are human|attention required|cf-error-details|captcha|cloudflare/.test(t)&&t.length<12000)return true; return false}
-async function getPage(url){var clean=url.trim(); var proxies=[
+/* Bases for the server-side import fetch. The Recipe Box server fetches pages
+   from the same network as the user, so sites that block public relay IPs still
+   load. Prefer the origin that served this page, then a configured sync server. */
+function importProxyBases(){
+  var out=[], seen={};
+  function add(u){
+    u=String(u||'').replace(/\/+$/,'');
+    if(!u||seen[u])return;
+    // A secure page cannot call an http endpoint, so skip those.
+    if(location.protocol==='https:'&&/^http:/i.test(u))return;
+    seen[u]=1; out.push(u);
+  }
+  try{add(location.origin+'/api/recipebox')}catch(e){}
+  try{
+    var raw=String((syncCfg()||{}).url||'').replace(/\/+$/,'');
+    if(/^https?:\/\//i.test(raw)){
+      var api=/\/(api\/)?recipebox$/i.test(raw)?raw:(raw+'/api/recipebox');
+      var host=''; try{host=new URL(api).hostname}catch(e){}
+      var pageLocal=/^(localhost|127\.0\.0\.1|\[::1\])$/i.test(location.hostname);
+      // The stock localhost:8787 default is only meaningful on the same machine.
+      if(!/^(localhost|127\.0\.0\.1|\[::1\])$/i.test(host)||pageLocal)add(api);
+    }
+  }catch(e){}
+  return out;
+}
+function importProxyTargets(u){
+  var bases=importProxyBases(), out=[];
+  for(var i=0;i<bases.length;i++){
+    out.push({name:i?'server-alt':'server',url:bases[i]+'/fetch?url='+encodeURIComponent(u)});
+  }
+  return out;
+}
+async function getPage(url){var clean=url.trim(); var proxies=importProxyTargets(clean).map(function(t){return {name:t.name,json:true,build:function(){return t.url}}}).concat([
   {name:'direct',build:function(u){return u}},
   {name:'jina',build:function(u){return 'https://r.jina.ai/'+u}},
   {name:'allorigins',build:function(u){return 'https://api.allorigins.win/raw?url='+encodeURIComponent(u)}},
   {name:'corsproxy',build:function(u){return 'https://corsproxy.io/?url='+encodeURIComponent(u)}},
   {name:'codetabs',build:function(u){return 'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u)}}
-]; var errs=[]; for(var i=0;i<proxies.length;i++){var p=proxies[i],target=p.build(clean); try{var res=await fetchWithTimeout(target,18000); if(!res.ok){errs.push(p.name+': HTTP '+res.status);continue} var t=await res.text(); if(!t||t.length<=120){errs.push(p.name+': empty/short');continue} if(looksBlockedPage(t,clean)){errs.push(p.name+': blocked');continue} return {html:t,via:p.name}; }catch(e){errs.push(p.name+': '+(e.name==='AbortError'?'timed out':(e.message||'failed')))}} throw new Error('Could not load page. '+(errs.length?('Relays: '+errs.join('; ')+'. '):'')+'This site may block automated/relay access. Try Paste text, paste from print view, or use image/PDF import (screenshots/save as PDF) with AI if configured.')}
+]); var errs=[]; for(var i=0;i<proxies.length;i++){var p=proxies[i],target=p.build(clean); try{var opts=null; if(p.json){var tk=String((syncCfg()||{}).token||''); if(tk)opts={headers:{Authorization:'Bearer '+tk}}} var res=await fetchWithTimeout(target,p.json?35000:20000,opts); if(!res.ok){errs.push(p.name+': HTTP '+res.status);continue} var body=await res.text(); if(p.json){var j=null; try{j=JSON.parse(body)}catch(e){} if(!j||typeof j.html!=='string'){errs.push(p.name+': '+((j&&j.error)||'no page returned'));continue} body=j.html} if(!body||body.length<=120){errs.push(p.name+': empty/short');continue} if(looksBlockedPage(body,clean)){errs.push(p.name+': blocked');continue} return {html:body,via:p.name}; }catch(e){errs.push(p.name+': '+(e.name==='AbortError'?'timed out':(e.message||'failed')))}} throw new Error('Could not load page. '+(errs.length?('Relays: '+errs.join('; ')+'. '):'')+'This site may block automated/relay access. Try Paste text, paste from print view, or use image/PDF import (screenshots/save as PDF) with AI if configured.')}
 var DEFMODEL='openai/gpt-4o-mini'; function aiCfg(){try{return JSON.parse(localStorage.getItem(SKEY))||{}}catch(e){return {}}} function aiSave(c){try{localStorage.setItem(SKEY,JSON.stringify(c||{}))}catch(e){}}
 function importPrefs(){try{return JSON.parse(localStorage.getItem(PKEY))||{}}catch(e){return {}}} function saveImportPrefs(p){try{localStorage.setItem(PKEY,JSON.stringify(p||{}))}catch(e){}}
 function parseAiJson(txt){if(Array.isArray(txt))txt=txt.map(function(x){return x&&x.text||''}).join(''); txt=String(txt||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim(); var a=txt.indexOf('{'),b=txt.lastIndexOf('}'); if(a<0||b<a)throw new Error('Model did not return JSON.'); try{return JSON.parse(txt.slice(a,b+1))}catch(e){throw new Error('Model returned unreadable JSON.')}}
@@ -252,7 +284,7 @@ $('newCat').onkeydown=function(e){if(e.key==='Enter')$('addCat').click()};
 $('btnNew').onclick=function(){openEdit(null)}; $('eCancel').onclick=function(){state.editDraft=null;$('dEdit').close()};
 $('eSave').onclick=async function(){var t=$('fTitle').value.trim(); if(!t){toast('Add a title');return} var d={title:t,cats:checked($('fCatBox')),servings:$('fServings').value.trim(),time:$('fTime').value.trim(),difficulty:$('fDifficulty').value,rating:parseInt($('fRating').value,10)||0,tags:arr($('fTags').value.split(',')),fav:$('fFav').checked,ing:lines($('fIng').value),steps:lines($('fSteps').value),equip:lines($('fEquip').value),nutrition:$('fNutrition').value.trim(),notes:$('fNotes').value.trim(),src:$('fSource').value.trim(),updated:now()}; d.main=parseMain($('fMain').value); if(!d.main.length)d.main=detect(d); var dup=!state.editId&&findDup(d); if(dup){var res=await resolveDuplicate(dup.r,d); if(res.action==='keep_existing'||res.action==='cancel'){return} if(res.action==='keep_imported'){Object.assign(dup.r,d,{id:dup.r.id,created:dup.r.created,updated:now()}); save(); render(); $('dEdit').close(); toast('Replaced existing'); return} if(res.action==='keep_both'){d.title=res.rename||nameDupTitle(d.title)}} if(state.editId){Object.assign(state.recipes.find(function(x){return x.id===state.editId}),norm(d))} else {d.id=uid(); d.created=now(); state.recipes.push(norm(d))} save(); render(); state.editDraft=null; $('dEdit').close(); toast('Recipe saved')};
 
-$('btnImport').onclick=function(){var p=importPrefs(); catChecks($('fImpCat'),(p.cats&&p.cats.length)?p.cats:state.cats.slice(0,1)); $('fFile').value=''; $('fPaste').value=''; $('fPic').value=''; $('fUrl').value=''; $('fAiUrl').checked=!!p.aiUrl; if($('fAutoImg'))$('fAutoImg').checked=!!p.autoImg; $('pickBox').style.display='none'; state.staged=[]; renderStage(); $('uHint').textContent='Structured recipe data first; AI fallback/option. Public relays used for fetch.'; $('pHint').textContent=aiCfg().key?'Add images or PDF (pages rendered in-browser). Stage, reorder/remove, then read with AI (vision model).':'Add OpenRouter key for image/PDF/AI import.'; setStatus('iStatus',''); $('dImport').showModal()};
+$('btnImport').onclick=function(){var p=importPrefs(); catChecks($('fImpCat'),(p.cats&&p.cats.length)?p.cats:state.cats.slice(0,1)); $('fFile').value=''; $('fPaste').value=''; $('fPic').value=''; $('fUrl').value=''; $('fAiUrl').checked=!!p.aiUrl; if($('fAutoImg'))$('fAutoImg').checked=!!p.autoImg; $('pickBox').style.display='none'; state.staged=[]; renderStage(); $('uHint').textContent='Fetches through your Recipe Box server first, then public relays; structured recipe data first, AI fallback/option.'; $('pHint').textContent=aiCfg().key?'Add images or PDF (pages rendered in-browser). Stage, reorder/remove, then read with AI (vision model).':'Add OpenRouter key for image/PDF/AI import.'; setStatus('iStatus',''); $('dImport').showModal()};
 $('iCancel').onclick=function(){$('dImport').close()};
 $('iGo').onclick=async function(){var cats=checked($('fImpCat')),files=Array.prototype.slice.call($('fFile').files||[]),pasted=$('fPaste').value,total=0; saveImportPrefs({cats:cats,aiUrl:$('fAiUrl').checked,autoImg:!!($('fAutoImg')&&$('fAutoImg').checked)}); if(pasted.trim()){var pr=parseText(pasted); if(pr){var res=await addImported([pr],cats,{title:'Pasted text'}); total+=(res&&res.n)||0;}} if(!files.length){if(total){$('dImport').close(); toast('Imported '+total)} else setStatus('iStatus','Nothing to import.','err'); return} setStatus('iStatus','Importing '+files.length+' file(s)...'); for(var i=0;i<files.length;i++){var f=files[i]; try{var txt=await new Promise(function(resolve,reject){var rd=new FileReader(); rd.onload=function(){resolve(String(rd.result||''))}; rd.onerror=function(){reject(rd.error||new Error('read failed'))}; rd.readAsText(f)}); var parsed=null; try{parsed=JSON.parse(txt)}catch(e){} if(parsed&&isEncrypted(parsed)){try{parsed=await decryptPayload(parsed)}catch(de){setStatus('iStatus','Skipped '+f.name+': '+(de.message||de),'err'); continue}} var list=[]; if(parsed)list=collect(parsed); else {var r=parseText(txt); if(r)list=[r]} var res2=await addImported(list,cats,{title:'File: '+f.name}); total+=(res2&&res2.n)||0;}catch(e){setStatus('iStatus','Could not import '+f.name+': '+(e.message||e),'err')}} $('dImport').close(); toast('Imported '+total)};
 

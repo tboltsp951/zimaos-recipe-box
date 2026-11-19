@@ -1,4 +1,4 @@
-const CACHE = 'recipe-box-v24';
+const CACHE = 'recipe-box-v25';
 const ASSETS = [
   './',
   './index.html',
@@ -64,6 +64,9 @@ self.addEventListener('fetch', (e) => {
     return;
   }
   if (req.method !== 'GET') return;
+  // Never cache API traffic: sync payloads and import fetches must be live, and
+  // a cached page fetch would also bloat the offline cache.
+  if (url.pathname.startsWith('/api/')) return;
   if (url.pathname.includes('/__share__/')) {
     e.respondWith(caches.match(req));
     return;
