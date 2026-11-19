@@ -36,9 +36,15 @@ function diagExplain(d) {
   var lines = [];
   lines.push('Tried ' + names.join(', ') + '.');
   var triedServer = names.some(function (n) { return /^server/.test(n); });
-  lines.push(triedServer
-    ? 'Your Recipe Box server tried it from your own network too, so the block is on the site side.'
-    : 'The Recipe Box server route was not reachable (a static copy of the app?), so only public relays were tried.');
+  var serverMissing = d.attempts.some(function (a) { return /route not available/i.test(a.detail || ''); });
+  if (serverMissing) {
+    lines.push('This build has no server fetch route, so only public relays were tried.');
+    lines.push('Next: update Recipe Box on your box to 1.0.2 or later, which fetches pages from your own network.');
+  } else {
+    lines.push(triedServer
+      ? 'Your Recipe Box server tried it from your own network too, so the block is on the site side.'
+      : 'The Recipe Box server route was not reachable (a static copy of the app?), so only public relays were tried.');
+  }
 
   if (kinds.blocked) {
     lines.push('The page answered but looked like a bot-check or error page (Cloudflare / "are you a robot" / captcha).');
