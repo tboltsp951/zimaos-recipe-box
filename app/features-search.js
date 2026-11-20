@@ -248,7 +248,7 @@ function initSearchUI() {
     var v = q.value;
     var d = searchDescribe(v);
     if (d) { el.innerHTML = esc(d); el.style.display = 'block'; return; }
-    if (/[a-zA-Z]+:|"/.test(v)) { el.textContent = 'Try tag:vegan, cat:mains, ing:flour, under:30, serves:6, rating:>=4, fav, photo, cooked, -olive, "green beans"'; el.style.display = 'block'; return; }
+    if (/[a-zA-Z]+:|"/.test(v)) { el.textContent = 'Try tag:vegan, cat:mains, ing:eggs ing:pork (both), under:30, serves:6, rating:>=4, fav, photo, cooked, -olive, "green beans"'; el.style.display = 'block'; return; }
     el.style.display = 'none';
   }
 
