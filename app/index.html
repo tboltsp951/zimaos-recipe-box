@@ -55,6 +55,13 @@
     </div>
   </aside>
   <section>
+    <div class="panel" id="favSection">
+      <div class="row spread" style="margin:0">
+        <strong>★ Favorites <span class="small" id="favCount">(0)</span></strong>
+        <button id="favShowAll" title="Filter the recipe list to favorites only">Show all favorites</button>
+      </div>
+      <div id="favList" style="margin-top:6px"></div>
+    </div>
     <div class="grid2"><input id="q" type="search" placeholder="Search title, ingredients, notes, tags"><select id="sort"><option value="updated">Sort: recently updated</option><option value="title">Sort: title</option><option value="rating">Sort: rating</option><option value="fav">Sort: favorites first</option></select></div>
     <details class="panel" style="margin:8px 0"><summary><strong>Filters</strong> <span class="small">(favorites, photos, rating, difficulty)</span></summary>
       <div class="grid2" style="margin-top:8px">
@@ -329,6 +336,7 @@
 <script src="features-sync.js"></script>
 <script src="features-camera.js"></script>
 <script src="features-recs.js"></script>
+<script src="features-favs.js"></script>
 <script src="features-subs.js"></script>
 <script src="features-shelf.js"></script>
 <script src="features-cards.js"></script>

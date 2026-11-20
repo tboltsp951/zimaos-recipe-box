@@ -1,4 +1,4 @@
-const CACHE = 'recipe-box-v29';
+const CACHE = 'recipe-box-v30';
 const ASSETS = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const ASSETS = [
   './features-sync.js',
   './features-camera.js',
   './features-recs.js',
+  './features-favs.js',
   './features-subs.js',
   './features-shelf.js',
   './features-cards.js',
