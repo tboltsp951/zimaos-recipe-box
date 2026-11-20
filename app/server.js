@@ -50,9 +50,9 @@ function ensure() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(VERSIONS_DIR)) fs.mkdirSync(VERSIONS_DIR, { recursive: true });
   if (!fs.existsSync(DATA_FILE)) {
-    const cats = ['Breakfast','Mains','Desserts','Salads','Soups','Poultry','Fish','Meat',
-      'Vegetables','Appetizers','Sauces','Side Dishes','Bakery','Pasta','Casseroles',
-      'Snacks','Beverages','Rubs'];
+    const cats = ['Appetizers','Bakery','Beef','Beverages','Breakfast','Casseroles',
+      'Desserts','Fish','Mains','Pasta','Pork','Poultry','Rubs','Salads','Sauces',
+      'Side Dishes','Snacks','Soups','Vegetables'];
     fs.writeFileSync(DATA_FILE, JSON.stringify({ recipes: [], cats: cats }, null, 2));
   }
 }

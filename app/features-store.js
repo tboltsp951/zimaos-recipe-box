@@ -264,25 +264,62 @@ save = function () {
   scheduleLocalBackup();
 };
 
-/* Existing installs keep their saved category list; add any defaults they are
-   missing rather than replacing what the user already has. */
+/* Category housekeeping runs on load and on every payload apply (file open,
+   sync merge, version restore), so a server or backup with the old names cannot
+   bring "Meat" back after a device has been migrated. */
+function catSort(a, b) {
+  a = String(a).toLowerCase(); b = String(b).toLowerCase();
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function normalizeCategoryState() {
+  var changed = false;
+  // "Meat" became "Beef"; a user may also have added their own "Beef", so
+  // dedupe case-insensitively after the rename.
+  function normList(list) {
+    if (!Array.isArray(list)) return list || [];
+    var seen = {}, out = [];
+    list.forEach(function (c) {
+      var name = String(c) === 'Meat' ? 'Beef' : String(c);
+      var key = name.toLowerCase();
+      if (seen[key]) { changed = true; return; }
+      seen[key] = true;
+      out.push(name);
+      if (name !== c) changed = true;
+    });
+    return out;
+  }
+  state.cats = normList(state.cats);
+  state.sel = normList(state.sel);
+  (state.recipes || []).forEach(function (r) { if (r) r.cats = normList(r.cats); });
+  (state.trash || []).forEach(function (r) { if (r) r.cats = normList(r.cats); });
+  (state.savedViews || []).forEach(function (v) { if (v && v.cats) v.cats = normList(v.cats); });
+
+  var sorted = state.cats.slice().sort(catSort);
+  if (sorted.some(function (c, i) { return c !== state.cats[i]; })) {
+    state.cats = sorted;
+    changed = true;
+  }
+  return changed;
+}
+
+/* Existing installs keep their custom categories; add any defaults they are
+   missing, then normalise names and order. */
 function mergeDefaultCategories() {
   var defaults = (typeof DEFAULT_CATS !== 'undefined') ? DEFAULT_CATS : [];
   if (!defaults.length) return false;
-  var current = Array.isArray(state.cats) ? state.cats : [];
   var seen = {};
-  current.forEach(function (c) { seen[String(c).toLowerCase()] = true; });
+  state.cats.forEach(function (c) { seen[String(c).toLowerCase()] = true; });
   var added = 0;
   defaults.forEach(function (c) {
     var key = String(c).toLowerCase();
     if (seen[key]) return;
     seen[key] = true;
-    current.push(c);
+    state.cats.push(c);
     added++;
   });
-  if (!added) return false;
-  state.cats = current;
-  return true;
+  if (normalizeCategoryState()) return true;
+  return added > 0;
 }
 
 function loadExtras() {
@@ -296,7 +333,7 @@ function loadExtras() {
   } catch (e) {}
   // Bring older installs up to date with categories they are missing, without
   // touching categories the user added themselves.
-  try { if (mergeDefaultCategories()) saveLocalOnly(); } catch (e) {}
+  try { if (mergeDefaultCategories()) { saveLocalOnly(); render(); } } catch (e) {}
 }
 
 async function payloadFull() {
