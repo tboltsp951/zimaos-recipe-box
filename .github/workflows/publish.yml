@@ -40,7 +40,7 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:1.0.6
+            ${{ env.IMAGE }}:1.0.7
             ${{ env.IMAGE }}:${{ github.sha }}
 
       - name: Smoke test the image

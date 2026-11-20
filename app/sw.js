@@ -1,4 +1,4 @@
-const CACHE = 'recipe-box-v28';
+const CACHE = 'recipe-box-v29';
 const ASSETS = [
   './',
   './index.html',

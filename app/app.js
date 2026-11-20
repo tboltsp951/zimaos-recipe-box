@@ -228,6 +228,36 @@ var DEFMODEL='openai/gpt-4o-mini'; function aiCfg(){try{return JSON.parse(localS
 function importPrefs(){try{return JSON.parse(localStorage.getItem(PKEY))||{}}catch(e){return {}}} function saveImportPrefs(p){try{localStorage.setItem(PKEY,JSON.stringify(p||{}))}catch(e){}}
 function parseAiJson(txt){if(Array.isArray(txt))txt=txt.map(function(x){return x&&x.text||''}).join(''); txt=String(txt||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim(); var a=txt.indexOf('{'),b=txt.lastIndexOf('}'); if(a<0||b<a)throw new Error('Model did not return JSON.'); try{return JSON.parse(txt.slice(a,b+1))}catch(e){throw new Error('Model returned unreadable JSON.')}}
 async function aiRequest(body){var c=aiCfg(); if(!c.key)throw new Error('Add OpenRouter key in AI settings.'); var res=await fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{'Authorization':'Bearer '+c.key,'Content-Type':'application/json','HTTP-Referer':location.href,'X-Title':'Recipe Box'},body:JSON.stringify(body)}); var raw=await res.text(),data={}; try{data=JSON.parse(raw)}catch(e){} if(!res.ok){var msg=(data.error&&(data.error.message||data.error.code))||('Request failed (HTTP '+res.status+')'); if(res.status===401||res.status===403)msg+=' — check key.'; if(res.status===404)msg+=' — check model.'; throw new Error(msg)} return data}
+/* When a category is created, optionally file existing recipes into it. Only
+   id/title/ingredients go to the model, and any id outside the batch it was
+   shown is discarded, so a hallucinated id can never touch a recipe. */
+async function aiFileCategory(cat){
+  cat=String(cat||'').trim(); if(!cat)return {added:0,errors:[]};
+  var recipes=(state.recipes||[]).filter(function(r){return r&&r.id});
+  if(!recipes.length)return {added:0,errors:[]};
+  var cfg=aiCfg(); if(!cfg.key)throw new Error('Add an OpenRouter key in Settings to use AI filing.');
+  var model=(cfg.model||DEFMODEL).trim()||DEFMODEL;
+  var BATCH=40, matched={}, errors=[];
+  for(var start=0;start<recipes.length;start+=BATCH){
+    var batch=recipes.slice(start,start+BATCH);
+    var items=batch.map(function(r){return {id:r.id,title:r.title,ingredients:(r.ing||[]).slice(0,25),categories:r.cats||[]}});
+    var sys='You file recipes into categories. Decide which listed recipes belong in the category "'+cat+'". Reply ONLY JSON: {"ids":["id1","id2"]}. Use only ids that appear in the list; never invent ids. Return {"ids":[]} if none fit.';
+    try{
+      var data=await aiRequest({model:model,temperature:0,messages:[{role:'system',content:sys},{role:'user',content:JSON.stringify(items)}]});
+      var content=(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
+      var o=parseAiJson(content), ids=Array.isArray(o.ids)?o.ids:[];
+      var valid={}; batch.forEach(function(r){valid[r.id]=true});
+      ids.forEach(function(i){if(valid[i])matched[i]=true});
+    }catch(e){errors.push((e&&e.message)||String(e))}
+  }
+  var added=0;
+  recipes.forEach(function(r){
+    if(!matched[r.id])return;
+    var has=(r.cats||[]).some(function(c){return String(c).toLowerCase()===cat.toLowerCase()});
+    if(!has){r.cats=(r.cats||[]).concat([cat]); added++}
+  });
+  return {added:added,errors:errors,considered:recipes.length};
+}
 async function aiRecipe(parts,opts){var c=aiCfg(), model=(c.model||DEFMODEL).trim()||DEFMODEL; var sys='Extract recipe(s). Reply ONLY JSON: {"recipes":[{"title":"","ingredients":[],"steps":[],"notes":"","servings":"","time":"","categories":[],"tags":[],"equipment":[],"nutrition":"","difficulty":"","source":""}]}. Categories must be chosen from: '+JSON.stringify(state.cats)+'. If none, {"recipes":[],"error":"no recipe found"}.';
   var data=await aiRequest({model:model,temperature:0,messages:[{role:'system',content:sys},{role:'user',content:parts}]}); var content=(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||''; var o=parseAiJson(content); if(o.error&&!(o.recipes&&o.recipes.length))throw new Error(o.error==='no recipe found'?'No recipe found.':'AI error: '+o.error); var out=(o.recipes||[o]).map(function(x){var r=fromObj(x); if(r){r.cats=mapCats(x.categories||x.cats||r.cats); r.tags=arr(x.tags||r.tags); r.equip=arr(x.equipment||r.equip); r.nutrition=r.nutrition||String(x.nutrition||''); if(opts&&opts.source&&!r.src)r.src=opts.source; r._review=true;} return r}).filter(function(r){return r&&(r.ing.length||r.steps.length)}); if(!out.length)throw new Error('No usable recipe extracted.'); return out}
 function pageText(doc){var clone=doc.cloneNode(true); clone.querySelectorAll('script,style,noscript,svg,iframe,canvas,nav,footer,header,form,aside').forEach(function(n){n.remove()}); var root=clone.querySelector('article,[itemtype*="Recipe"],.recipe,.tasty-recipes,.wprm-recipe-container,main')||clone.body||clone; var text=(root.innerText||root.textContent||'').replace(/\u00a0/g,' ').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim(); return ('Page title: '+(doc.title||'')+'\n\n'+text).slice(0,24000)}
@@ -287,7 +317,35 @@ function initCollectionsUI(){renderSavedViews(); renderBulkBar(); var ap=$('save
  var bsh=$('bulkShop'); if(bsh)bsh.onclick=function(){var ids=bulkIds(); if(!ids.length){toast('Select recipes first');return} ids.forEach(function(id){var r=state.recipes.filter(function(x){return x.id===id})[0]; if(r)addToShop(r,1)}); toast('Added ingredients from '+ids.length+' recipe(s) to shopping list')};
  var bex=$('bulkExport'); if(bex)bex.onclick=function(){var ids=bulkIds(); if(!ids.length){toast('Select recipes first');return} state.exportSel={}; ids.forEach(function(id){state.exportSel[id]=1}); exportSelectedRecipes()};
  var bdl=$('bulkDelete'); if(bdl)bdl.onclick=function(){var ids=bulkIds(); if(!ids.length){toast('Select recipes first');return} if(!confirm('Move '+ids.length+' recipe(s) to trash?'))return; ids.forEach(function(id){var r=state.recipes.filter(function(x){return x.id===id})[0]; if(!r)return; state.trash.unshift(JSON.parse(JSON.stringify(r))); state.recipes=state.recipes.filter(function(x){return x.id!==id}); state.plan=state.plan.filter(function(p){return p!==id})}); state.selIds={}; state.bulkMode=false; save(); render(); toast('Moved '+ids.length+' recipe(s) to trash')}}
-$('addCat').onclick=function(){var v=$('newCat').value.trim(); if(!v)return; if(state.cats.indexOf(v)<0){state.cats.push(v); save()} $('newCat').value=''; state.sel=[v]; render()};
+$('addCat').onclick=async function(){
+  var inp=$('newCat'), btn=$('addCat'), st=$('catStatus'), aiBox=$('newCatAi');
+  var v=inp.value.trim(); if(!v)return;
+  if((state.cats||[]).some(function(c){return String(c).toLowerCase()===v.toLowerCase()})){toast('"'+v+'" already exists'); state.sel=[v]; inp.value=''; render(); return}
+  var doAi=!!(aiBox&&aiBox.checked && state.recipes.length);
+  state.cats.push(v);
+  try{normalizeCategoryState()}catch(e){state.cats.sort(function(a,b){a=String(a).toLowerCase();b=String(b).toLowerCase();return a<b?-1:a>b?1:0})}
+  state.sel=[v];
+  if(!doAi){ inp.value=''; save(); render(); if(st){st.textContent='Added '+v+'.'; st.style.color=''; setTimeout(function(){if(st.textContent.indexOf('Added '+v)===0)st.textContent=''},4000)} return }
+  inp.value=''; inp.disabled=true; btn.disabled=true; if(aiBox)aiBox.disabled=true;
+  if(st){st.textContent='Added '+v+'. Scanning recipes…'; st.style.color=''}
+  save(); render();
+  try{
+    var res=await aiFileCategory(v);
+    if(res.added>0){ save(); render(); }
+    var failed=res.errors&&res.errors.length;
+    var msg;
+    if(failed&&!res.added)msg='Added '+v+', but AI filing failed: '+res.errors[0];
+    else{
+      msg=res.considered?('Filed '+res.added+' of '+res.considered+' recipes into '+v+'.'):'Added '+v+'.';
+      if(failed)msg+=' Could not scan all: '+res.errors[0]+(res.errors.length>1?' (+'+(res.errors.length-1)+' more)':'');
+    }
+    if(st){st.textContent=msg; st.style.color=failed?'var(--warn)':'';} else toast(msg);
+  }catch(e){
+    if(st){st.textContent='Added '+v+', but AI filing failed: '+(e.message||e)+'.'; st.style.color='var(--warn)'} else toast('Category added; AI filing failed');
+  }finally{
+    inp.disabled=false; btn.disabled=false; if(aiBox)aiBox.disabled=false; inp.focus();
+  }
+};
 $('newCat').onkeydown=function(e){if(e.key==='Enter')$('addCat').click()};
 $('btnNew').onclick=function(){openEdit(null)}; $('eCancel').onclick=function(){state.editDraft=null;$('dEdit').close()};
 $('eSave').onclick=async function(){var t=$('fTitle').value.trim(); if(!t){toast('Add a title');return} var d={title:t,cats:checked($('fCatBox')),servings:$('fServings').value.trim(),time:$('fTime').value.trim(),difficulty:$('fDifficulty').value,rating:parseInt($('fRating').value,10)||0,tags:arr($('fTags').value.split(',')),fav:$('fFav').checked,ing:lines($('fIng').value),steps:lines($('fSteps').value),equip:lines($('fEquip').value),nutrition:$('fNutrition').value.trim(),notes:$('fNotes').value.trim(),src:$('fSource').value.trim(),updated:now()}; d.main=parseMain($('fMain').value); if(!d.main.length)d.main=detect(d); var dup=!state.editId&&findDup(d); if(dup){var res=await resolveDuplicate(dup.r,d); if(res.action==='keep_existing'||res.action==='cancel'){return} if(res.action==='keep_imported'){Object.assign(dup.r,d,{id:dup.r.id,created:dup.r.created,updated:now()}); save(); render(); $('dEdit').close(); toast('Replaced existing'); return} if(res.action==='keep_both'){d.title=res.rename||nameDupTitle(d.title)}} if(state.editId){Object.assign(state.recipes.find(function(x){return x.id===state.editId}),norm(d))} else {d.id=uid(); d.created=now(); state.recipes.push(norm(d))} save(); render(); state.editDraft=null; $('dEdit').close(); toast('Recipe saved')};
